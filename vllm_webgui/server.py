@@ -26,6 +26,8 @@ PORT = int(os.environ.get("VLLM_WEBGUI_PORT", "18000"))
 DEFAULT_IMAGE = "vllm/vllm-openai:latest"
 DEFAULT_MODEL = "Qwen/Qwen3-0.6B"
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{1,63}$")
+PERCENT_RE = re.compile(r"(?<!\d)(100|[0-9]{1,2})(?:\.\d+)?%")
+SIZE_RE = re.compile(r"([0-9]+(?:\.[0-9]+)?)\s*([KMGT]?i?B)\s*/\s*([0-9]+(?:\.[0-9]+)?)\s*([KMGT]?i?B)", re.IGNORECASE)
 
 jobs = {}
 jobs_lock = threading.Lock()
@@ -93,6 +95,23 @@ def upsert_config(item):
     containers.append(item)
     cfg["containers"] = sorted(containers, key=lambda c: c.get("name", ""))
     save_config(cfg)
+
+
+def rename_cache_dir(old_name, new_name):
+    if not old_name or old_name == new_name:
+        return
+    old_dir = HF_CACHE_BASE / old_name
+    new_dir = HF_CACHE_BASE / new_name
+    if not old_dir.exists():
+        return
+    if new_dir.exists():
+        if new_dir.is_dir() and not any(new_dir.iterdir()):
+            new_dir.rmdir()
+        else:
+            raise ValueError(f"Cache-Ordner fuer neuen Namen existiert bereits: {new_dir}")
+    if new_dir.exists():
+        raise ValueError(f"Cache-Ordner fuer neuen Namen existiert bereits: {new_dir}")
+    old_dir.rename(new_dir)
 
 
 def delete_config(name):
@@ -359,6 +378,84 @@ def local_ip():
     return (proc.stdout.strip().split() or ["127.0.0.1"])[0]
 
 
+def size_to_bytes(value, unit):
+    factors = {
+        "B": 1,
+        "KB": 1000,
+        "MB": 1000 ** 2,
+        "GB": 1000 ** 3,
+        "TB": 1000 ** 4,
+        "KIB": 1024,
+        "MIB": 1024 ** 2,
+        "GIB": 1024 ** 3,
+        "TIB": 1024 ** 4,
+    }
+    return float(value) * factors.get(unit.upper(), 1)
+
+
+def extract_progress_percent(text):
+    values = []
+    for match in PERCENT_RE.finditer(text):
+        try:
+            values.append(float(match.group(1)))
+        except ValueError:
+            pass
+    for match in SIZE_RE.finditer(text):
+        current = size_to_bytes(match.group(1), match.group(2))
+        total = size_to_bytes(match.group(3), match.group(4))
+        if total > 0:
+            values.append(min(100.0, max(0.0, current / total * 100.0)))
+    if not values:
+        return None
+    return int(max(values))
+
+
+def latest_start_job_for(name):
+    with jobs_lock:
+        matching = [
+            job for job in jobs.values()
+            if job.get("label") == f"start {name}" and job.get("status") == "running"
+        ]
+        if not matching:
+            return None
+        return max(matching, key=lambda job: job.get("started", 0))
+
+
+def download_progress_for(item, status, api_ready):
+    name = item["name"]
+    if api_ready:
+        return {"percent": 100, "active": False, "label": "API bereit"}
+
+    job = latest_start_job_for(name)
+    if job:
+        text = "\n".join(job.get("log", []))
+        percent = extract_progress_percent(text)
+        return {
+            "percent": percent,
+            "active": True,
+            "label": "Download/Start laeuft" if percent is None else f"{percent}%",
+        }
+
+    if status == "running":
+        logs = tail_logs(name, lines=220)
+        percent = extract_progress_percent(logs)
+        if "Application startup complete" in logs:
+            percent = 100
+        elif "Graph capturing finished" in logs:
+            percent = max(percent or 0, 95)
+        elif "Loading weights took" in logs or "Model loading took" in logs:
+            percent = max(percent or 0, 80)
+        elif "Loading model from scratch" in logs:
+            percent = max(percent or 0, 50)
+        return {
+            "percent": percent,
+            "active": percent is None or percent < 100,
+            "label": "Startet" if percent is None else f"{percent}%",
+        }
+
+    return {"percent": 0, "active": False, "label": "0%"}
+
+
 def api_status_ready(item):
     try:
       port = int(item.get("port", 0))
@@ -390,12 +487,14 @@ def docker_status_for(item):
     labels = container_labels(name) if status != "missing" else {}
     api_ready = api_status_ready(item) if status == "running" else False
     api_url = f"http://{local_ip()}:{item['port']}/v1"
+    progress = download_progress_for(item, status, api_ready)
     return {
         "status": status,
         "api_status": "ready" if api_ready else "not_ready",
         "api_ready": api_ready,
         "api_url": api_url if api_ready else "",
         "api_models_url": f"{api_url}/models" if api_ready else "",
+        "download_progress": progress,
         "config_current": labels.get("ai.vllm.webgui.config") == config_hash(item),
         "url": api_url,
     }
@@ -476,6 +575,7 @@ class Handler(SimpleHTTPRequestHandler):
                 data = self.read_json()
                 old_name = data.get("old_name") or data.get("name")
                 item = validate_container(data, old_name=old_name)
+                rename_cache_dir(old_name, item["name"])
                 upsert_config(item)
                 self.send_json({"ok": True, "container": {k: v for k, v in item.items() if k != "hf_token"}})
                 return

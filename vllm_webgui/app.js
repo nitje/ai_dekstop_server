@@ -105,7 +105,7 @@ function renderNvidiaStatus() {
 function renderRows() {
   const containers = state.containers || [];
   if (!containers.length) {
-    rows.innerHTML = `<tr><td colspan="8">Noch keine Container konfiguriert.</td></tr>`;
+    rows.innerHTML = `<tr><td colspan="9">Noch keine Container konfiguriert.</td></tr>`;
     return;
   }
   rows.innerHTML = containers.map((c) => `
@@ -116,6 +116,7 @@ function renderRows() {
         ${badge(c.api_ready ? "API bereit" : "API nicht bereit", c.api_ready ? "running" : "missing")}
         ${c.api_ready ? `<br><a class="api-link" href="${escapeHtml(c.api_models_url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(c.api_models_url)}</a>` : ""}
       </td>
+      <td>${progressBar(c.download_progress)}</td>
       <td>${escapeHtml(c.profile)}</td>
       <td>${escapeHtml(c.model)}</td>
       <td>${escapeHtml(c.port)}</td>
@@ -132,6 +133,21 @@ function renderRows() {
       </td>
     </tr>
   `).join("");
+}
+
+function progressBar(progress = {}) {
+  const percent = Number.isFinite(progress.percent) ? Math.max(0, Math.min(100, progress.percent)) : null;
+  const active = !!progress.active;
+  const label = progress.label || (percent === null ? "wartet" : `${percent}%`);
+  const style = percent === null ? "" : `style="width:${percent}%"`;
+  return `
+    <div class="progress-wrap">
+      <div class="progress-track ${active && percent === null ? "indeterminate" : ""}">
+        <div class="progress-fill ${active ? "active" : ""}" ${style}></div>
+      </div>
+      <small>${escapeHtml(label)}</small>
+    </div>
+  `;
 }
 
 async function startJob(action, name) {

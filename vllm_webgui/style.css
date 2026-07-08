@@ -215,6 +215,51 @@ button.danger {
   gap: 8px;
 }
 
+.progress-wrap {
+  min-width: 150px;
+  display: grid;
+  gap: 4px;
+}
+
+.progress-track {
+  position: relative;
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #263344;
+}
+
+.progress-fill {
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 180ms ease;
+}
+
+.progress-fill.active {
+  background: linear-gradient(90deg, var(--accent), #5cc8ff);
+}
+
+.progress-track.indeterminate .progress-fill {
+  position: absolute;
+  width: 38%;
+  animation: progress-slide 1.2s ease-in-out infinite;
+}
+
+@keyframes progress-slide {
+  0% {
+    left: -40%;
+  }
+  100% {
+    left: 105%;
+  }
+}
+
+:root[data-theme="day"] .progress-track {
+  background: #e8eef5;
+}
+
 #logBox {
   min-height: 360px;
   max-height: 560px;
