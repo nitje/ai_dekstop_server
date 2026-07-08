@@ -13,5 +13,5 @@ GGUF option added but it is in BETA
 <br><br><br>
 <img src="https://interceptor.marconitschke.de/attachment.php?aid=824" alt="ai_desktop_server_rtx6000pro_workstation_comfyui">
 <br>
-<img src="https://interceptor.marconitschke.de/attachment.php?aid=826" alt="ai_desktop_server_rtx6000pro_workstation_gguf">
+<img src="https://interceptor.marconitschke.de/attachment.php?aid=827" alt="ai_desktop_server_rtx6000pro_workstation_gguf">
 <br>
