@@ -12,6 +12,8 @@ Im Persöhnlichen Ordner wird auch ein link zu ComfyUI erstellt wo ihr Model und
 GGUF option added but it is in BETA
 <br><br><br>
 <img src="https://interceptor.marconitschke.de/attachment.php?aid=824" alt="ai_desktop_server_rtx6000pro_workstation_comfyui">
-<br>
+<br><br><br>
 <img src="https://interceptor.marconitschke.de/attachment.php?aid=827" alt="ai_desktop_server_rtx6000pro_workstation_gguf">
+<br><br>
+<img src="https://interceptor.marconitschke.de/attachment.php?aid=828" alt="ai_desktop_server_rtx6000pro_workstation_gguf_link">
 <br>
