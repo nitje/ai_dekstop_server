@@ -16,4 +16,6 @@ GGUF option added but it is in BETA
 <img src="https://interceptor.marconitschke.de/attachment.php?aid=827" alt="ai_desktop_server_rtx6000pro_workstation_gguf">
 <br><br>
 <img src="https://interceptor.marconitschke.de/attachment.php?aid=828" alt="ai_desktop_server_rtx6000pro_workstation_gguf_link">
+<br><br>
+<img src="https://interceptor.marconitschke.de/attachment.php?aid=829" alt="ai_desktop_server_rtx6000pro_workstation_120b_tetris">
 <br>
