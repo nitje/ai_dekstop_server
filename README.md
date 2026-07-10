@@ -11,6 +11,7 @@ Im Persöhnlichen Ordner wird auch ein link zu ComfyUI erstellt wo ihr Model und
 <br><br><br>
 GGUF option added but it is in BETA
 <br>
+<br>
 vLLM Zusatzargumente:
 
 --gpu-memory-utilization 0.88 --max-model-len 131072 --max-num-seqs 1 --max-num-batched-tokens 8192 --enable-auto-tool-choice --tool-call-parser openai
