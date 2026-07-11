@@ -27,6 +27,8 @@ vLLM Zusatzargumente:
 <br>
 # optional:
 
+--max-num-seqs 2
+
 --enable-reasoning
 
 --reasoning-parser qwen3
