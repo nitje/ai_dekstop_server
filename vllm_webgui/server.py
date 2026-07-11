@@ -23,6 +23,7 @@ CONFIG_FILE = Path(os.environ.get("VLLM_WEBGUI_CONFIG", str(BASE_DIR / "containe
 HF_CACHE_BASE = Path(os.environ.get("VLLM_WEBGUI_HF_CACHE_DIR", str(BASE_DIR / "huggingface-cache")))
 STATIC_DIR = Path(os.environ.get("VLLM_WEBGUI_STATIC_DIR", str(BASE_DIR / "static")))
 STARTUP_STATS_FILE = Path(os.environ.get("VLLM_WEBGUI_STARTUP_STATS", str(BASE_DIR / "startup_stats.json")))
+UI_SETTINGS_FILE = Path(os.environ.get("VLLM_WEBGUI_UI_SETTINGS", str(BASE_DIR / "ui_settings.json")))
 HOST = os.environ.get("VLLM_WEBGUI_HOST", "0.0.0.0")
 PORT = int(os.environ.get("VLLM_WEBGUI_PORT", "18000"))
 
@@ -36,8 +37,35 @@ jobs = {}
 jobs_lock = threading.Lock()
 config_lock = threading.Lock()
 startup_lock = threading.Lock()
+ui_settings_lock = threading.Lock()
 cpu_lock = threading.Lock()
 last_cpu_sample = None
+
+DEFAULT_UI_SETTINGS = {
+    "theme": "dark",
+    "poll": {
+        "overview": 5000,
+        "system": 2000,
+        "containers": 3000,
+        "logs": 1500,
+    },
+    "cards": {
+        "overview": True,
+        "system": True,
+        "form": True,
+        "logs": True,
+    },
+    "view": {
+        "containerLimit": 5,
+        "containerSort": "port",
+        "containerSortDirection": "asc",
+        "ramSizeUnit": "GB",
+        "vramSizeUnit": "GB",
+        "diskSizeUnit": "GB",
+        "systemTempUnit": "C",
+    },
+    "selected_disks": None,
+}
 
 
 def run(cmd, check=False, timeout=None):
@@ -81,6 +109,78 @@ def save_config(cfg):
         BASE_DIR.mkdir(parents=True, exist_ok=True)
         CONFIG_FILE.write_text(json.dumps(cfg, indent=2, sort_keys=True), encoding="utf-8")
         os.chmod(CONFIG_FILE, 0o600)
+
+
+def ui_int(value, default, minimum):
+    try:
+        return max(minimum, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def normalize_ui_settings(data):
+    data = data if isinstance(data, dict) else {}
+    poll = data.get("poll") if isinstance(data.get("poll"), dict) else {}
+    cards = data.get("cards") if isinstance(data.get("cards"), dict) else {}
+    view = data.get("view") if isinstance(data.get("view"), dict) else {}
+    selected_disks = data.get("selected_disks")
+    if selected_disks is not None:
+        selected_disks = [str(item) for item in selected_disks] if isinstance(selected_disks, list) else None
+    sort_fields = {"port", "name", "startup", "running", "api_ready"}
+    sort_directions = {"asc", "desc"}
+    size_units = {"GB", "TB"}
+    temp_units = {"C", "F"}
+    container_sort = view.get("containerSort")
+    container_sort_direction = view.get("containerSortDirection")
+    old_system_size_unit = view.get("systemSizeUnit")
+    ram_size_unit = view.get("ramSizeUnit", old_system_size_unit)
+    vram_size_unit = view.get("vramSizeUnit", old_system_size_unit)
+    disk_size_unit = view.get("diskSizeUnit", old_system_size_unit)
+    system_temp_unit = view.get("systemTempUnit")
+    return {
+        "theme": data.get("theme") if data.get("theme") in ("dark", "day") else DEFAULT_UI_SETTINGS["theme"],
+        "poll": {
+            "overview": ui_int(poll.get("overview"), DEFAULT_UI_SETTINGS["poll"]["overview"], 1000),
+            "system": ui_int(poll.get("system"), DEFAULT_UI_SETTINGS["poll"]["system"], 500),
+            "containers": ui_int(poll.get("containers"), DEFAULT_UI_SETTINGS["poll"]["containers"], 1000),
+            "logs": ui_int(poll.get("logs"), DEFAULT_UI_SETTINGS["poll"]["logs"], 500),
+        },
+        "cards": {
+            "overview": bool(cards.get("overview", DEFAULT_UI_SETTINGS["cards"]["overview"])),
+            "system": bool(cards.get("system", DEFAULT_UI_SETTINGS["cards"]["system"])),
+            "form": bool(cards.get("form", DEFAULT_UI_SETTINGS["cards"]["form"])),
+            "logs": bool(cards.get("logs", DEFAULT_UI_SETTINGS["cards"]["logs"])),
+        },
+        "view": {
+            "containerLimit": ui_int(view.get("containerLimit"), DEFAULT_UI_SETTINGS["view"]["containerLimit"], 1),
+            "containerSort": container_sort if container_sort in sort_fields else DEFAULT_UI_SETTINGS["view"]["containerSort"],
+            "containerSortDirection": container_sort_direction if container_sort_direction in sort_directions else DEFAULT_UI_SETTINGS["view"]["containerSortDirection"],
+            "ramSizeUnit": ram_size_unit if ram_size_unit in size_units else DEFAULT_UI_SETTINGS["view"]["ramSizeUnit"],
+            "vramSizeUnit": vram_size_unit if vram_size_unit in size_units else DEFAULT_UI_SETTINGS["view"]["vramSizeUnit"],
+            "diskSizeUnit": disk_size_unit if disk_size_unit in size_units else DEFAULT_UI_SETTINGS["view"]["diskSizeUnit"],
+            "systemTempUnit": system_temp_unit if system_temp_unit in temp_units else DEFAULT_UI_SETTINGS["view"]["systemTempUnit"],
+        },
+        "selected_disks": selected_disks,
+    }
+
+
+def load_ui_settings():
+    with ui_settings_lock:
+        if not UI_SETTINGS_FILE.exists():
+            return normalize_ui_settings(DEFAULT_UI_SETTINGS)
+        try:
+            return normalize_ui_settings(json.loads(UI_SETTINGS_FILE.read_text(encoding="utf-8")))
+        except Exception:
+            return normalize_ui_settings(DEFAULT_UI_SETTINGS)
+
+
+def save_ui_settings(settings):
+    cleaned = normalize_ui_settings(settings)
+    with ui_settings_lock:
+        BASE_DIR.mkdir(parents=True, exist_ok=True)
+        UI_SETTINGS_FILE.write_text(json.dumps(cleaned, indent=2, sort_keys=True), encoding="utf-8")
+        os.chmod(UI_SETTINGS_FILE, 0o600)
+    return cleaned
 
 
 def load_startup_stats_unlocked():
@@ -177,22 +277,25 @@ def startup_status_for(name, status, api_ready):
             if estimate:
                 text = f"Startzeit: {format_duration(elapsed)} / ca. {format_duration(estimate)}"
                 title = "Schaetzung aus bisherigen normalen Neustarts." if kind == "restart" else "Schaetzung aus bisherigen Erststarts/Neuaufbauten mit Pull/Download."
+                sort_seconds = estimate
             else:
                 text = f"Startzeit: Berechnung ({format_duration(elapsed)})"
                 title = "Noch keine verlaessliche Startzeit. Erststart, Docker-Pull und Modelldownload koennen deutlich laenger dauern."
-            return {"text": text, "title": title, "state": "measuring", "kind": kind}
+                sort_seconds = None
+            return {"text": text, "title": title, "state": "measuring", "kind": kind, "sort_seconds": sort_seconds}
 
         restart_estimate = average_duration(entry.get("restart", []))
         cold_estimate = average_duration(entry.get("cold", []))
         if restart_estimate:
             title = "Ungefaehre API-Startzeit nach einem normalen Neustart. Erststart/Pull/Download dauert laenger."
-            return {"text": f"Startzeit ca. {format_duration(restart_estimate)}", "title": title, "state": "estimated", "kind": "restart"}
+            return {"text": f"Startzeit ca. {format_duration(restart_estimate)}", "title": title, "state": "estimated", "kind": "restart", "sort_seconds": restart_estimate}
         if cold_estimate:
             title = "Bisher nur Erststart/Neuaufbau gemessen. Normale Neustarts werden spaeter genauer."
-            return {"text": f"Startzeit ca. {format_duration(cold_estimate)}", "title": title, "state": "estimated", "kind": "cold"}
+            return {"text": f"Startzeit ca. {format_duration(cold_estimate)}", "title": title, "state": "estimated", "kind": "cold", "sort_seconds": cold_estimate}
         if last:
-            return {"text": f"Letzter Start {format_duration(last.get('duration'))}", "title": "Noch zu wenig Daten fuer eine stabile Schaetzung.", "state": "last", "kind": last.get("kind", "")}
-    return {"text": "Startzeit: Berechnung", "title": "Noch keine erfolgreiche Startzeit gemessen.", "state": "unknown", "kind": ""}
+            duration = int(last.get("duration", 0) or 0)
+            return {"text": f"Letzter Start {format_duration(duration)}", "title": "Noch zu wenig Daten fuer eine stabile Schaetzung.", "state": "last", "kind": last.get("kind", ""), "sort_seconds": duration or None}
+    return {"text": "Startzeit: Berechnung", "title": "Noch keine erfolgreiche Startzeit gemessen.", "state": "unknown", "kind": "", "sort_seconds": None}
 
 
 def list_configured():
@@ -1118,7 +1221,7 @@ def tail_logs(name, lines=160):
     return (proc.stdout or "") + (proc.stderr or "")
 
 
-def system_status():
+def container_status():
     cfg_items = list_configured()
     containers = []
     for item in cfg_items:
@@ -1128,8 +1231,13 @@ def system_status():
         merged.update(docker_status_for(item))
         containers.append(merged)
     containers.sort(key=lambda c: (int(c.get("port", 0)), c.get("name", "")))
-    with jobs_lock:
-        job_values = list(jobs.values())[-20:]
+    return {
+        "containers": containers,
+        "ports_in_use": sorted(host_ports_in_use()),
+    }
+
+
+def overview_status():
     return {
         "docker": docker_available(),
         "nvidia_smi": nvidia_smi_ok(),
@@ -1137,10 +1245,25 @@ def system_status():
         "docker_nvidia_runtime": docker_nvidia_runtime_ok(),
         "ip": local_ip(),
         "web_port": PORT,
-        "ports_in_use": sorted(host_ports_in_use()),
+    }
+
+
+def jobs_status():
+    with jobs_lock:
+        job_values = list(jobs.values())[-20:]
+    return {"jobs": job_values}
+
+
+def system_status():
+    containers = container_status()
+    overview = overview_status()
+    jobs_data = jobs_status()
+    return {
+        **overview,
+        "ports_in_use": containers["ports_in_use"],
         "system": system_metrics(),
-        "containers": containers,
-        "jobs": job_values,
+        "containers": containers["containers"],
+        "jobs": jobs_data["jobs"],
     }
 
 
@@ -1166,6 +1289,21 @@ class Handler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path == "/api/status":
             self.send_json(system_status())
+            return
+        if parsed.path == "/api/overview":
+            self.send_json(overview_status())
+            return
+        if parsed.path == "/api/system":
+            self.send_json({"system": system_metrics()})
+            return
+        if parsed.path == "/api/containers":
+            self.send_json(container_status())
+            return
+        if parsed.path == "/api/ui-settings":
+            self.send_json({"settings": load_ui_settings()})
+            return
+        if parsed.path == "/api/jobs":
+            self.send_json(jobs_status())
             return
         if parsed.path.startswith("/api/containers/") and parsed.path.endswith("/logs"):
             name = parsed.path.split("/")[3]
@@ -1201,6 +1339,10 @@ class Handler(SimpleHTTPRequestHandler):
             if parsed.path == "/api/nvidia/repair":
                 job_id = start_background("repair nvidia docker", job_repair_nvidia)
                 self.send_json({"ok": True, "job_id": job_id})
+                return
+            if parsed.path == "/api/ui-settings":
+                settings = save_ui_settings(self.read_json())
+                self.send_json({"ok": True, "settings": settings})
                 return
             if parsed.path.startswith("/api/containers/"):
                 parts = parsed.path.strip("/").split("/")

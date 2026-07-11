@@ -2,11 +2,15 @@ const rows = document.getElementById("containerRows");
 const statusLine = document.getElementById("statusLine");
 const logBox = document.getElementById("logBox");
 const jobLine = document.getElementById("jobLine");
+const overviewCard = document.getElementById("overviewCard");
+const systemCard = document.getElementById("systemCard");
 const form = document.getElementById("containerForm");
+const logsCard = document.getElementById("logsCard");
 const refreshBtn = document.getElementById("refreshBtn");
 const resetFormBtn = document.getElementById("resetFormBtn");
 const repairNvidiaBtn = document.getElementById("repairNvidiaBtn");
 const themeToggleBtn = document.getElementById("themeToggleBtn");
+const settingsBtn = document.getElementById("settingsBtn");
 const downloadLogBtn = document.getElementById("downloadLogBtn");
 const clearLogBtn = document.getElementById("clearLogBtn");
 const systemMetrics = document.getElementById("systemMetrics");
@@ -16,6 +20,25 @@ const diskModalList = document.getElementById("diskModalList");
 const diskModalCloseBtn = document.getElementById("diskModalCloseBtn");
 const diskModalSaveBtn = document.getElementById("diskModalSaveBtn");
 const diskModalCancelBtn = document.getElementById("diskModalCancelBtn");
+const settingsModal = document.getElementById("settingsModal");
+const settingsModalCloseBtn = document.getElementById("settingsModalCloseBtn");
+const settingsModalSaveBtn = document.getElementById("settingsModalSaveBtn");
+const settingsModalResetBtn = document.getElementById("settingsModalResetBtn");
+const settingsModalCancelBtn = document.getElementById("settingsModalCancelBtn");
+const overviewIntervalInput = document.getElementById("overviewIntervalInput");
+const systemIntervalInput = document.getElementById("systemIntervalInput");
+const containersIntervalInput = document.getElementById("containersIntervalInput");
+const logsIntervalInput = document.getElementById("logsIntervalInput");
+const containerLimitInput = document.getElementById("containerLimitInput");
+const containerSortInput = document.getElementById("containerSortInput");
+const containerSortDirectionInput = document.getElementById("containerSortDirectionInput");
+const showOverviewCard = document.getElementById("showOverviewCard");
+const showSystemCard = document.getElementById("showSystemCard");
+const showFormCard = document.getElementById("showFormCard");
+const showLogsCard = document.getElementById("showLogsCard");
+const containerLimitControls = document.getElementById("containerLimitControls");
+const containerLimitSummary = document.getElementById("containerLimitSummary");
+const containerLimitToggleBtn = document.getElementById("containerLimitToggleBtn");
 const modelFormat = document.getElementById("modelFormat");
 const ggufFields = document.getElementById("ggufFields");
 const modelLabel = document.getElementById("modelLabel");
@@ -27,7 +50,44 @@ let selectedName = null;
 let selectedJob = null;
 let currentLogTitle = "vllm-log";
 let portManuallyEdited = false;
-let selectedDiskKeys = readStoredDiskKeys();
+let selectedDiskKeys = null;
+let pollTimers = {};
+let pollBusy = {overview: false, system: false, containers: false, logs: false};
+let showAllContainers = false;
+
+const defaultPollSettings = {
+  overview: 5000,
+  system: 2000,
+  containers: 3000,
+  logs: 1500,
+};
+
+const defaultCardSettings = {
+  overview: true,
+  system: true,
+  form: true,
+  logs: true,
+};
+
+const defaultViewSettings = {
+  containerLimit: 5,
+  containerSort: "port",
+  containerSortDirection: "asc",
+  ramSizeUnit: "GB",
+  vramSizeUnit: "GB",
+  diskSizeUnit: "GB",
+  systemTempUnit: "C",
+};
+
+const defaultUiSettings = {
+  theme: "dark",
+  poll: defaultPollSettings,
+  cards: defaultCardSettings,
+  view: defaultViewSettings,
+  selected_disks: null,
+};
+
+let uiSettings = normalizeUiSettings(defaultUiSettings);
 
 const defaults = {
   nvidia: "vllm/vllm-openai:latest",
@@ -191,19 +251,35 @@ function startupLine(status = {}) {
   return `<div class="startup-line" title="${escapeHtml(status.title || status.text)}">${escapeHtml(status.text)}</div>`;
 }
 
-function bytesToGb(value) {
-  return Math.round(Number(value || 0) / 1000 ** 3);
+function formatNumber(value, digits = 0) {
+  return Number(value || 0).toLocaleString("de-DE", {
+    maximumFractionDigits: digits,
+    minimumFractionDigits: digits,
+  });
 }
 
-function readStoredDiskKeys() {
-  const raw = localStorage.getItem("vllm-selected-disks");
-  if (raw === null) return null;
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
+function formatBytesUnit(value, unit = "GB") {
+  const divisor = unit === "TB" ? 1024 ** 4 : 1024 ** 3;
+  const amount = Number(value || 0) / divisor;
+  if (unit === "TB") return `${formatNumber(amount, amount < 10 ? 2 : 1)}TB`;
+  return `${formatNumber(amount, amount < 10 ? 1 : 0)}GB`;
+}
+
+function formatUsage(used, total, unit = "GB") {
+  return `${formatBytesUnit(used, unit)}/${formatBytesUnit(total, unit)}`;
+}
+
+function formatPercent(value, missing = false) {
+  if (missing) return "-";
+  const percent = Math.max(0, Math.min(100, Number(value || 0)));
+  return `${formatNumber(percent, percent % 1 ? 1 : 0)}%`;
+}
+
+function formatTemp(value, unit = "C", missing = false) {
+  if (missing || value === null || value === undefined) return "-";
+  const celsius = Number(value);
+  const display = unit === "F" ? (celsius * 9 / 5) + 32 : celsius;
+  return `${formatNumber(display, 0)}${unit}`;
 }
 
 function diskKey(disk) {
@@ -214,20 +290,174 @@ function diskLabel(disk) {
   return `${disk.source || "Disk"} ${disk.mount || ""}`.trim();
 }
 
-function saveSelectedDisks(keys) {
-  selectedDiskKeys = [...new Set(keys)];
-  localStorage.setItem("vllm-selected-disks", JSON.stringify(selectedDiskKeys));
+function normalizeUiSettings(settings = {}) {
+  const poll = settings.poll || {};
+  const cards = settings.cards || {};
+  const view = settings.view || {};
+  const sortFields = new Set(["port", "name", "startup", "running", "api_ready"]);
+  const sortDirections = new Set(["asc", "desc"]);
+  const sizeUnits = new Set(["GB", "TB"]);
+  const tempUnits = new Set(["C", "F"]);
+  const containerSort = sortFields.has(view.containerSort) ? view.containerSort : defaultViewSettings.containerSort;
+  const containerSortDirection = sortDirections.has(view.containerSortDirection) ? view.containerSortDirection : defaultViewSettings.containerSortDirection;
+  const legacySizeUnit = sizeUnits.has(view.systemSizeUnit) ? view.systemSizeUnit : null;
+  const ramSizeUnit = sizeUnits.has(view.ramSizeUnit) ? view.ramSizeUnit : (legacySizeUnit || defaultViewSettings.ramSizeUnit);
+  const vramSizeUnit = sizeUnits.has(view.vramSizeUnit) ? view.vramSizeUnit : (legacySizeUnit || defaultViewSettings.vramSizeUnit);
+  const diskSizeUnit = sizeUnits.has(view.diskSizeUnit) ? view.diskSizeUnit : (legacySizeUnit || defaultViewSettings.diskSizeUnit);
+  const systemTempUnit = tempUnits.has(view.systemTempUnit) ? view.systemTempUnit : defaultViewSettings.systemTempUnit;
+  return {
+    theme: settings.theme === "day" ? "day" : "dark",
+    poll: {
+      overview: Math.max(1000, Number(poll.overview) || defaultPollSettings.overview),
+      system: Math.max(500, Number(poll.system) || defaultPollSettings.system),
+      containers: Math.max(1000, Number(poll.containers) || defaultPollSettings.containers),
+      logs: Math.max(500, Number(poll.logs) || defaultPollSettings.logs),
+    },
+    cards: {
+      overview: cards.overview !== false,
+      system: cards.system !== false,
+      form: cards.form !== false,
+      logs: cards.logs !== false,
+    },
+    view: {
+      containerLimit: Math.max(1, Number(view.containerLimit) || defaultViewSettings.containerLimit),
+      containerSort,
+      containerSortDirection,
+      ramSizeUnit,
+      vramSizeUnit,
+      diskSizeUnit,
+      systemTempUnit,
+    },
+    selected_disks: Array.isArray(settings.selected_disks) ? [...new Set(settings.selected_disks)] : null,
+  };
 }
 
-function metricBar(label, value, detail = "", options = {}) {
+async function loadUiSettings() {
+  try {
+    const data = await api("/api/ui-settings");
+    uiSettings = normalizeUiSettings(data.settings || {});
+  } catch (error) {
+    console.warn("UI-Einstellungen konnten nicht geladen werden:", error);
+    uiSettings = normalizeUiSettings(defaultUiSettings);
+  }
+  selectedDiskKeys = Array.isArray(uiSettings.selected_disks) ? [...uiSettings.selected_disks] : null;
+}
+
+async function persistUiSettings() {
+  try {
+    const data = await api("/api/ui-settings", {method: "POST", body: JSON.stringify(uiSettings)});
+    uiSettings = normalizeUiSettings(data.settings || uiSettings);
+    selectedDiskKeys = Array.isArray(uiSettings.selected_disks) ? [...uiSettings.selected_disks] : null;
+  } catch (error) {
+    console.warn("UI-Einstellungen konnten nicht gespeichert werden:", error);
+  }
+}
+
+async function saveSelectedDisks(keys) {
+  selectedDiskKeys = [...new Set(keys)];
+  uiSettings.selected_disks = selectedDiskKeys;
+  await persistUiSettings();
+}
+
+function readPollSettings() {
+  return {...defaultPollSettings, ...uiSettings.poll};
+}
+
+function savePollSettings(settings) {
+  const cleaned = {
+    overview: Math.max(1000, Number(settings.overview) || defaultPollSettings.overview),
+    system: Math.max(500, Number(settings.system) || defaultPollSettings.system),
+    containers: Math.max(1000, Number(settings.containers) || defaultPollSettings.containers),
+    logs: Math.max(500, Number(settings.logs) || defaultPollSettings.logs),
+  };
+  uiSettings.poll = cleaned;
+  return cleaned;
+}
+
+function readCardSettings() {
+  return {...defaultCardSettings, ...uiSettings.cards};
+}
+
+function saveCardSettings(settings) {
+  const cleaned = {
+    overview: !!settings.overview,
+    system: !!settings.system,
+    form: !!settings.form,
+    logs: !!settings.logs,
+  };
+  uiSettings.cards = cleaned;
+  return cleaned;
+}
+
+function readViewSettings() {
+  return {...defaultViewSettings, ...uiSettings.view};
+}
+
+function saveViewSettings(settings) {
+  const sortFields = new Set(["port", "name", "startup", "running", "api_ready"]);
+  const sortDirections = new Set(["asc", "desc"]);
+  const sizeUnits = new Set(["GB", "TB"]);
+  const tempUnits = new Set(["C", "F"]);
+  const current = readViewSettings();
+  const cleaned = {
+    containerLimit: Math.max(1, Number(settings.containerLimit) || defaultViewSettings.containerLimit),
+    containerSort: sortFields.has(settings.containerSort) ? settings.containerSort : defaultViewSettings.containerSort,
+    containerSortDirection: sortDirections.has(settings.containerSortDirection) ? settings.containerSortDirection : defaultViewSettings.containerSortDirection,
+    ramSizeUnit: sizeUnits.has(settings.ramSizeUnit) ? settings.ramSizeUnit : current.ramSizeUnit,
+    vramSizeUnit: sizeUnits.has(settings.vramSizeUnit) ? settings.vramSizeUnit : current.vramSizeUnit,
+    diskSizeUnit: sizeUnits.has(settings.diskSizeUnit) ? settings.diskSizeUnit : current.diskSizeUnit,
+    systemTempUnit: tempUnits.has(settings.systemTempUnit) ? settings.systemTempUnit : current.systemTempUnit,
+  };
+  uiSettings.view = cleaned;
+  return cleaned;
+}
+
+function applyCardVisibility(settings = readCardSettings()) {
+  overviewCard.classList.toggle("hidden", !settings.overview);
+  systemCard.classList.toggle("hidden", !settings.system);
+  form.classList.toggle("hidden", !settings.form);
+  logsCard.classList.toggle("hidden", !settings.logs);
+}
+
+async function guardedPoll(key, fn) {
+  if (pollBusy[key]) return;
+  pollBusy[key] = true;
+  try {
+    await fn();
+  } catch (error) {
+    console.warn(`Refresh ${key} fehlgeschlagen:`, error);
+  } finally {
+    pollBusy[key] = false;
+  }
+}
+
+function restartPolling() {
+  Object.values(pollTimers).forEach((timer) => clearInterval(timer));
+  const settings = readPollSettings();
+  pollTimers = {
+    overview: setInterval(() => guardedPoll("overview", refreshOverview), settings.overview),
+    system: setInterval(() => guardedPoll("system", refreshSystem), settings.system),
+    containers: setInterval(() => guardedPoll("containers", refreshContainers), settings.containers),
+    logs: setInterval(() => guardedPoll("logs", refreshLogsArea), settings.logs),
+  };
+}
+
+function metricBar(label, value, options = {}) {
   const missing = options.missing;
   const percent = Math.max(0, Math.min(100, Number(value || 0)));
   const fill = missing ? 0 : percent;
-  const display = missing ? "-" : (options.display || `${Math.round(percent)}%`);
-  const suffix = detail ? ` ${escapeHtml(detail)}` : "";
+  const center = missing ? "-" : (options.center || "");
+  const right = missing ? "-" : (Object.prototype.hasOwnProperty.call(options, "right") ? options.right : formatPercent(percent));
+  const classes = ["metric-item"];
+  if (options.toggle) classes.push("clickable");
+  const attrs = options.toggle ? ` role="button" tabindex="0" data-metric-toggle="${escapeHtml(options.toggle)}"` : "";
   return `
-    <div class="metric-item">
-      <div class="metric-label"><span>${escapeHtml(label)}</span><strong>${escapeHtml(display)}${suffix}</strong></div>
+    <div class="${classes.join(" ")}"${attrs}>
+      <div class="metric-label">
+        <span>${escapeHtml(label)}</span>
+        <strong class="metric-center">${escapeHtml(center)}</strong>
+        <strong class="metric-right">${escapeHtml(right)}</strong>
+      </div>
       <div class="metric-track"><div class="metric-fill" style="width:${fill}%"></div></div>
     </div>
   `;
@@ -237,6 +467,11 @@ function renderSystemMetrics() {
   const system = state?.system || {};
   const gpu = system.gpu || {};
   const disks = system.disks || [];
+  const viewSettings = readViewSettings();
+  const ramSizeUnit = viewSettings.ramSizeUnit || "GB";
+  const vramSizeUnit = viewSettings.vramSizeUnit || "GB";
+  const diskSizeUnit = viewSettings.diskSizeUnit || "GB";
+  const tempUnit = viewSettings.systemTempUnit || "C";
   const availableKeys = disks.map(diskKey);
   let activeKeys = Array.isArray(selectedDiskKeys) ? selectedDiskKeys.filter((key) => availableKeys.includes(key)) : [];
   if (selectedDiskKeys === null && disks.length) {
@@ -246,16 +481,33 @@ function renderSystemMetrics() {
     saveSelectedDisks(activeKeys);
   }
   const diskItems = disks.filter((disk) => activeKeys.includes(diskKey(disk))).map((disk, index) => {
-    const detail = `${bytesToGb(disk.used)}GB/${bytesToGb(disk.total)}GB`;
     const label = `HDD${index + 1}`;
-    return metricBar(label, disk.percent, "", {display: detail});
+    return metricBar(label, disk.percent, {
+      center: formatUsage(disk.used, disk.total, diskSizeUnit),
+      right: formatPercent(disk.percent),
+      toggle: "disk-size",
+    });
   });
   systemMetrics.innerHTML = [
-    metricBar("CPU", system.cpu?.percent || 0),
-    metricBar("RAM", system.ram?.percent || 0),
-    metricBar("GPU", gpu.gpu_percent || 0, "", {missing: !gpu.available}),
-    metricBar("VRAM", gpu.vram_percent || 0, "", {missing: !gpu.available}),
-    metricBar("Temp", gpu.temp ?? 0, "", {missing: !gpu.available, display: gpu.temp !== null && gpu.temp !== undefined ? `${gpu.temp}C` : "-"}),
+    metricBar("CPU", system.cpu?.percent || 0, {right: formatPercent(system.cpu?.percent || 0)}),
+    metricBar("RAM", system.ram?.percent || 0, {
+      center: formatUsage(system.ram?.used, system.ram?.total, ramSizeUnit),
+      right: formatPercent(system.ram?.percent || 0),
+      toggle: "ram-size",
+    }),
+    metricBar("GPU", gpu.gpu_percent || 0, {missing: !gpu.available, right: formatPercent(gpu.gpu_percent || 0, !gpu.available)}),
+    metricBar("VRAM", gpu.vram_percent || 0, {
+      missing: !gpu.available,
+      center: formatUsage(gpu.vram_used, gpu.vram_total, vramSizeUnit),
+      right: formatPercent(gpu.vram_percent || 0, !gpu.available),
+      toggle: "vram-size",
+    }),
+    metricBar("Temp", gpu.temp ?? 0, {
+      missing: !gpu.available,
+      center: formatTemp(gpu.temp, tempUnit, !gpu.available),
+      right: "",
+      toggle: "temp",
+    }),
     ...diskItems,
   ].join("");
   addDiskBtn.disabled = !disks.length;
@@ -270,13 +522,13 @@ function renderDiskModal() {
   const selected = new Set(Array.isArray(selectedDiskKeys) ? selectedDiskKeys : []);
   diskModalList.innerHTML = disks.map((disk) => {
     const key = diskKey(disk);
-    const detail = `${bytesToGb(disk.used)}GB/${bytesToGb(disk.total)}GB`;
+    const detail = `${formatUsage(disk.used, disk.total, readViewSettings().diskSizeUnit)} | ${formatPercent(disk.percent)} belegt`;
     return `
       <label class="disk-option">
         <input type="checkbox" value="${escapeHtml(key)}" ${selected.has(key) ? "checked" : ""}>
         <span>
           <strong>${escapeHtml(diskLabel(disk))}</strong>
-          <small>${escapeHtml(detail)} | ${escapeHtml(Math.round(disk.percent))}% belegt</small>
+          <small>${escapeHtml(detail)}</small>
         </span>
       </label>
     `;
@@ -292,21 +544,101 @@ function closeDiskModal() {
   diskModal.classList.add("hidden");
 }
 
-function applyDiskSelection() {
+async function applyDiskSelection() {
   const keys = [...diskModalList.querySelectorAll("input[type='checkbox']:checked")].map((input) => input.value);
-  saveSelectedDisks(keys);
+  await saveSelectedDisks(keys);
   renderSystemMetrics();
   closeDiskModal();
 }
 
-function applyTheme(theme) {
-  document.documentElement.dataset.theme = theme;
-  localStorage.setItem("vllm-theme", theme);
-  themeToggleBtn.textContent = theme === "dark" ? "Day" : "Dark";
+async function toggleSystemMetric(kind) {
+  const viewSettings = readViewSettings();
+  if (kind === "temp") {
+    saveViewSettings({...viewSettings, systemTempUnit: viewSettings.systemTempUnit === "C" ? "F" : "C"});
+  } else if (kind === "ram-size") {
+    saveViewSettings({...viewSettings, ramSizeUnit: viewSettings.ramSizeUnit === "GB" ? "TB" : "GB"});
+  } else if (kind === "vram-size") {
+    saveViewSettings({...viewSettings, vramSizeUnit: viewSettings.vramSizeUnit === "GB" ? "TB" : "GB"});
+  } else if (kind === "disk-size") {
+    saveViewSettings({...viewSettings, diskSizeUnit: viewSettings.diskSizeUnit === "GB" ? "TB" : "GB"});
+  } else {
+    return;
+  }
+  renderSystemMetrics();
+  await persistUiSettings();
+}
+
+function fillSettingsForm(settings = readPollSettings()) {
+  const cardSettings = readCardSettings();
+  const viewSettings = readViewSettings();
+  overviewIntervalInput.value = settings.overview;
+  systemIntervalInput.value = settings.system;
+  containersIntervalInput.value = settings.containers;
+  logsIntervalInput.value = settings.logs;
+  containerLimitInput.value = viewSettings.containerLimit;
+  containerSortInput.value = viewSettings.containerSort;
+  containerSortDirectionInput.value = viewSettings.containerSortDirection;
+  showOverviewCard.checked = cardSettings.overview;
+  showSystemCard.checked = cardSettings.system;
+  showFormCard.checked = cardSettings.form;
+  showLogsCard.checked = cardSettings.logs;
+}
+
+function openSettingsModal() {
+  fillSettingsForm();
+  settingsModal.classList.remove("hidden");
+}
+
+function closeSettingsModal() {
+  settingsModal.classList.add("hidden");
+}
+
+async function applySettings() {
+  savePollSettings({
+    overview: overviewIntervalInput.value,
+    system: systemIntervalInput.value,
+    containers: containersIntervalInput.value,
+    logs: logsIntervalInput.value,
+  });
+  applyCardVisibility(saveCardSettings({
+    overview: showOverviewCard.checked,
+    system: showSystemCard.checked,
+    form: showFormCard.checked,
+    logs: showLogsCard.checked,
+  }));
+  saveViewSettings({
+    containerLimit: containerLimitInput.value,
+    containerSort: containerSortInput.value,
+    containerSortDirection: containerSortDirectionInput.value,
+  });
+  showAllContainers = false;
+  renderRows();
+  await persistUiSettings();
+  restartPolling();
+  closeSettingsModal();
+}
+
+async function resetSettings() {
+  const settings = savePollSettings(defaultPollSettings);
+  applyCardVisibility(saveCardSettings(defaultCardSettings));
+  saveViewSettings(defaultViewSettings);
+  showAllContainers = false;
+  renderRows();
+  await persistUiSettings();
+  fillSettingsForm(settings);
+  restartPolling();
+}
+
+function applyTheme(theme, persist = false) {
+  const normalized = theme === "day" ? "day" : "dark";
+  uiSettings.theme = normalized;
+  document.documentElement.dataset.theme = normalized;
+  themeToggleBtn.textContent = normalized === "dark" ? "Day" : "Dark";
+  if (persist) persistUiSettings();
 }
 
 function initTheme() {
-  applyTheme(localStorage.getItem("vllm-theme") || "dark");
+  applyTheme(uiSettings.theme || "dark");
 }
 
 function fillForm(item = {}) {
@@ -362,15 +694,38 @@ function toggleModelFormat() {
     : "Normale Hugging-Face-Repo-ID, z.B. Qwen/Qwen3-0.6B.";
 }
 
-async function refresh() {
-  state = await api("/api/status");
+async function refreshOverview() {
+  const data = await api("/api/overview");
+  state = {...(state || {}), ...data};
   statusLine.textContent = `Docker: ${state.docker ? "ok" : "fehlt"} | NVIDIA SMI: ${state.nvidia_smi ? "aktiv" : "fehlt"} | Web: http://${state.ip}:${state.web_port}/`;
   renderNvidiaStatus();
+}
+
+async function refreshSystem() {
+  const data = await api("/api/system");
+  state = {...(state || {}), system: data.system};
   renderSystemMetrics();
+}
+
+async function refreshContainers() {
+  const data = await api("/api/containers");
+  state = {...(state || {}), containers: data.containers || [], ports_in_use: data.ports_in_use || []};
   renderRows();
   updateCreateFormPort();
+}
+
+async function refreshLogsArea() {
   await refreshJob();
   if (selectedName) await loadLogs(selectedName);
+}
+
+async function refresh() {
+  await Promise.all([
+    guardedPoll("overview", refreshOverview),
+    guardedPoll("system", refreshSystem),
+    guardedPoll("containers", refreshContainers),
+  ]);
+  await guardedPoll("logs", refreshLogsArea);
 }
 
 function renderNvidiaStatus() {
@@ -384,17 +739,64 @@ function renderNvidiaStatus() {
   `;
 }
 
-function renderRows() {
-  const containers = [...(state.containers || [])].sort((a, b) => {
-    const portA = Number(a.port || 0);
-    const portB = Number(b.port || 0);
-    return portA - portB || String(a.name || "").localeCompare(String(b.name || ""));
+function containerSortValue(container, field) {
+  if (field === "name") return String(container.name || "").toLowerCase();
+  if (field === "startup") {
+    const value = Number(container.startup_status?.sort_seconds);
+    return Number.isFinite(value) && value > 0 ? value : null;
+  }
+  if (field === "running") return container.status === "running" ? 1 : 0;
+  if (field === "api_ready") return container.api_ready ? 1 : 0;
+  return Number(container.port || 0);
+}
+
+function compareContainerValues(aValue, bValue, direction) {
+  const aMissing = aValue === null || aValue === undefined || aValue === "";
+  const bMissing = bValue === null || bValue === undefined || bValue === "";
+  if (aMissing && bMissing) return 0;
+  if (aMissing) return 1;
+  if (bMissing) return -1;
+  if (typeof aValue === "string" || typeof bValue === "string") {
+    return String(aValue).localeCompare(String(bValue)) * direction;
+  }
+  return (Number(aValue) - Number(bValue)) * direction;
+}
+
+function sortContainers(containers) {
+  const viewSettings = readViewSettings();
+  const field = viewSettings.containerSort;
+  const direction = viewSettings.containerSortDirection === "desc" ? -1 : 1;
+  return [...containers].sort((a, b) => {
+    const primary = compareContainerValues(
+      containerSortValue(a, field),
+      containerSortValue(b, field),
+      direction,
+    );
+    if (primary !== 0) return primary;
+    const portTie = Number(a.port || 0) - Number(b.port || 0);
+    if (portTie !== 0) return portTie;
+    return String(a.name || "").localeCompare(String(b.name || ""));
   });
+}
+
+function renderRows() {
+  const containers = sortContainers(state?.containers || []);
   if (!containers.length) {
     rows.innerHTML = `<tr><td colspan="9">Noch keine Container konfiguriert.</td></tr>`;
+    containerLimitControls.classList.add("hidden");
     return;
   }
-  rows.innerHTML = containers.map((c) => {
+  const limit = readViewSettings().containerLimit;
+  const visibleContainers = showAllContainers ? containers : containers.slice(0, limit);
+  const hasHiddenContainers = containers.length > limit;
+  containerLimitControls.classList.toggle("hidden", !hasHiddenContainers);
+  if (hasHiddenContainers) {
+    containerLimitSummary.textContent = showAllContainers
+      ? `Zeige alle ${containers.length} Container`
+      : `Zeige ${visibleContainers.length} von ${containers.length} Containern`;
+    containerLimitToggleBtn.textContent = showAllContainers ? "Weniger anzeigen" : "Alle anzeigen";
+  }
+  rows.innerHTML = visibleContainers.map((c) => {
     const modelCell = c.model_format === "gguf"
       ? `${escapeHtml(c.model)}<br><small>GGUF: ${renderGgufSource(c)}</small>`
       : `${escapeHtml(c.model)}${hfLink(c.model)}`;
@@ -534,7 +936,7 @@ rows.addEventListener("click", async (event) => {
       selectedName = null;
       await refreshJob();
     }
-    await refresh();
+    await Promise.all([refreshContainers(), refreshLogsArea()]);
   } catch (error) {
     alert(error.message);
   } finally {
@@ -551,12 +953,35 @@ modelFormat.addEventListener("change", toggleModelFormat);
 
 refreshBtn.addEventListener("click", refresh);
 resetFormBtn.addEventListener("click", () => fillForm());
+settingsBtn.addEventListener("click", openSettingsModal);
 addDiskBtn.addEventListener("click", openDiskModal);
+systemMetrics.addEventListener("click", (event) => {
+  const item = event.target.closest("[data-metric-toggle]");
+  if (item) toggleSystemMetric(item.dataset.metricToggle);
+});
+systemMetrics.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  const item = event.target.closest("[data-metric-toggle]");
+  if (!item) return;
+  event.preventDefault();
+  toggleSystemMetric(item.dataset.metricToggle);
+});
 diskModalSaveBtn.addEventListener("click", applyDiskSelection);
 diskModalCancelBtn.addEventListener("click", closeDiskModal);
 diskModalCloseBtn.addEventListener("click", closeDiskModal);
 diskModal.addEventListener("click", (event) => {
   if (event.target.dataset.closeModal === "disk") closeDiskModal();
+});
+settingsModalSaveBtn.addEventListener("click", applySettings);
+settingsModalResetBtn.addEventListener("click", resetSettings);
+settingsModalCancelBtn.addEventListener("click", closeSettingsModal);
+settingsModalCloseBtn.addEventListener("click", closeSettingsModal);
+settingsModal.addEventListener("click", (event) => {
+  if (event.target.dataset.closeModal === "settings") closeSettingsModal();
+});
+containerLimitToggleBtn.addEventListener("click", () => {
+  showAllContainers = !showAllContainers;
+  renderRows();
 });
 portInput.addEventListener("input", () => {
   portManuallyEdited = true;
@@ -569,7 +994,7 @@ portInput.addEventListener("blur", () => {
   }
 });
 themeToggleBtn.addEventListener("click", () => {
-  applyTheme(document.documentElement.dataset.theme === "dark" ? "day" : "dark");
+  applyTheme(document.documentElement.dataset.theme === "dark" ? "day" : "dark", true);
 });
 downloadLogBtn.addEventListener("click", downloadCurrentLog);
 clearLogBtn.addEventListener("click", clearVisibleLog);
@@ -583,7 +1008,13 @@ repairNvidiaBtn.addEventListener("click", async () => {
   }
 });
 
-initTheme();
-fillForm();
-refresh();
-setInterval(refresh, 5000);
+async function initApp() {
+  await loadUiSettings();
+  initTheme();
+  applyCardVisibility();
+  fillForm();
+  await refresh();
+  restartPolling();
+}
+
+initApp();

@@ -14,12 +14,13 @@
     </div>
     <div class="header-actions">
       <button id="themeToggleBtn" class="secondary">Day</button>
+      <button id="settingsBtn" class="secondary">Settings</button>
       <button id="refreshBtn">Aktualisieren</button>
     </div>
   </header>
 
   <main>
-    <section class="panel status-grid">
+    <section id="overviewCard" class="panel status-grid">
       <div>
         <h2>NVIDIA / Docker</h2>
         <div id="nvidiaStatus">Lade...</div>
@@ -27,9 +28,9 @@
       <button id="repairNvidiaBtn">NVIDIA Docker reparieren</button>
     </section>
 
-    <section class="panel">
+    <section id="systemCard" class="panel">
       <div class="panel-title">
-        <h2>Systemdaten</h2>
+        <h2>Systemauslastung</h2>
         <button type="button" id="addDiskBtn" class="icon-button" title="HDDs auswaehlen">+</button>
       </div>
       <div id="systemMetrics" class="system-metrics">Lade...</div>
@@ -54,6 +55,10 @@
           </thead>
           <tbody id="containerRows"></tbody>
         </table>
+      </div>
+      <div id="containerLimitControls" class="table-footer hidden">
+        <span id="containerLimitSummary"></span>
+        <button type="button" id="containerLimitToggleBtn" class="secondary">Alle anzeigen</button>
       </div>
     </section>
 
@@ -140,7 +145,7 @@
         </div>
       </form>
 
-      <section class="panel">
+      <section id="logsCard" class="panel">
         <div class="panel-title">
           <h2>Fortschritt / Logs</h2>
           <div class="actions">
@@ -165,6 +170,76 @@
       <div class="actions modal-actions">
         <button type="button" id="diskModalSaveBtn">Uebernehmen</button>
         <button type="button" id="diskModalCancelBtn" class="secondary">Abbrechen</button>
+      </div>
+    </section>
+  </div>
+
+  <div id="settingsModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="settingsModalTitle">
+    <div class="modal-backdrop" data-close-modal="settings"></div>
+    <section class="modal-panel">
+      <div class="panel-title">
+        <h2 id="settingsModalTitle">Settings</h2>
+        <button type="button" id="settingsModalCloseBtn" class="icon-button secondary" title="Schliessen">x</button>
+      </div>
+      <h2 class="modal-subtitle">Aktualisierung Interval in ms von Cards</h2>
+      <div class="settings-grid">
+        <label>NVIDIA / Docker
+          <input id="overviewIntervalInput" type="number" min="1000" step="500">
+        </label>
+        <label>Systemauslastung
+          <input id="systemIntervalInput" type="number" min="500" step="500">
+        </label>
+        <label>Container
+          <input id="containersIntervalInput" type="number" min="1000" step="500">
+        </label>
+        <label>Fortschritt / Logs
+          <input id="logsIntervalInput" type="number" min="500" step="500">
+        </label>
+      </div>
+      <h2 class="modal-subtitle">Cards anzeigen</h2>
+      <div class="settings-checks">
+        <label class="disk-option">
+          <input id="showOverviewCard" type="checkbox">
+          <span><strong>NVIDIA / Docker</strong></span>
+        </label>
+        <label class="disk-option">
+          <input id="showSystemCard" type="checkbox">
+          <span><strong>Systemauslastung</strong></span>
+        </label>
+        <label class="disk-option">
+          <input id="showFormCard" type="checkbox">
+          <span><strong>Container anlegen / bearbeiten</strong></span>
+        </label>
+        <label class="disk-option">
+          <input id="showLogsCard" type="checkbox">
+          <span><strong>Fortschritt / Logs</strong></span>
+        </label>
+      </div>
+      <h2 class="modal-subtitle">Container Anzeige</h2>
+      <div class="settings-grid">
+        <label>Max. Container anzeigen
+          <input id="containerLimitInput" type="number" min="1" step="1">
+        </label>
+        <label>Container sortieren nach
+          <select id="containerSortInput">
+            <option value="port">Port</option>
+            <option value="name">Name</option>
+            <option value="startup">Startzeit</option>
+            <option value="running">Container running</option>
+            <option value="api_ready">API bereit</option>
+          </select>
+        </label>
+        <label>Sortier-Richtung
+          <select id="containerSortDirectionInput">
+            <option value="asc">aufsteigend</option>
+            <option value="desc">absteigend</option>
+          </select>
+        </label>
+      </div>
+      <div class="actions modal-actions">
+        <button type="button" id="settingsModalSaveBtn">Uebernehmen</button>
+        <button type="button" id="settingsModalResetBtn" class="secondary">Standard</button>
+        <button type="button" id="settingsModalCancelBtn" class="secondary">Abbrechen</button>
       </div>
     </section>
   </div>

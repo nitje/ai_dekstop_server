@@ -77,6 +77,10 @@ main {
   gap: 18px;
 }
 
+#logsCard {
+  grid-column: 2;
+}
+
 .status-grid {
   display: flex;
   align-items: center;
@@ -105,6 +109,15 @@ main {
 
 .table-wrap {
   overflow-x: auto;
+}
+
+.table-footer {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 10px;
 }
 
 table {
@@ -222,6 +235,27 @@ label {
   min-width: 0;
 }
 
+.settings-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.settings-grid label {
+  margin-bottom: 0;
+}
+
+.settings-checks {
+  display: grid;
+  gap: 8px;
+}
+
+.modal-subtitle {
+  color: var(--muted);
+  font-size: 14px;
+  margin: 16px 0 10px;
+}
+
 input, select, button {
   min-height: 36px;
   border-radius: 6px;
@@ -337,11 +371,20 @@ button.icon-button {
   min-width: 0;
 }
 
+.metric-item.clickable {
+  cursor: pointer;
+}
+
+.metric-item.clickable:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+
 .metric-label {
   align-items: baseline;
-  display: flex;
+  display: grid;
   gap: 8px;
-  justify-content: space-between;
+  grid-template-columns: minmax(42px, auto) minmax(74px, 1fr) minmax(36px, auto);
   margin-bottom: 5px;
   min-height: 18px;
 }
@@ -358,9 +401,16 @@ button.icon-button {
   font-size: 12px;
   font-weight: 650;
   overflow: hidden;
-  text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.metric-center {
+  text-align: center;
+}
+
+.metric-right {
+  text-align: right;
 }
 
 .metric-track {
@@ -520,6 +570,10 @@ small.diagnostic {
 
   .grid {
     grid-template-columns: 1fr;
+  }
+
+  #logsCard {
+    grid-column: 1;
   }
 
   .panel-title {
