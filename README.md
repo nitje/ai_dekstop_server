@@ -46,4 +46,6 @@ vLLM Zusatzargumente:
 <img src="https://interceptor.marconitschke.de/attachment.php?aid=829" alt="ai_desktop_server_rtx6000pro_workstation_120b_tetris">
 <br><br>
 <img src="https://interceptor.marconitschke.de/attachment.php?aid=830" alt="ai_desktop_server_rtx6000pro_workstation_qwen3_coder_next_tetris">
+<br><br>
+<img src="https://interceptor.marconitschke.de/attachment.php?aid=831" alt="ai_desktop_server_rtx6000pro_workstation_timer_indicator">
 <br>
