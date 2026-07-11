@@ -9,6 +9,13 @@ const repairNvidiaBtn = document.getElementById("repairNvidiaBtn");
 const themeToggleBtn = document.getElementById("themeToggleBtn");
 const downloadLogBtn = document.getElementById("downloadLogBtn");
 const clearLogBtn = document.getElementById("clearLogBtn");
+const systemMetrics = document.getElementById("systemMetrics");
+const addDiskBtn = document.getElementById("addDiskBtn");
+const diskModal = document.getElementById("diskModal");
+const diskModalList = document.getElementById("diskModalList");
+const diskModalCloseBtn = document.getElementById("diskModalCloseBtn");
+const diskModalSaveBtn = document.getElementById("diskModalSaveBtn");
+const diskModalCancelBtn = document.getElementById("diskModalCancelBtn");
 const modelFormat = document.getElementById("modelFormat");
 const ggufFields = document.getElementById("ggufFields");
 const modelLabel = document.getElementById("modelLabel");
@@ -20,6 +27,7 @@ let selectedName = null;
 let selectedJob = null;
 let currentLogTitle = "vllm-log";
 let portManuallyEdited = false;
+let selectedDiskKeys = readStoredDiskKeys();
 
 const defaults = {
   nvidia: "vllm/vllm-openai:latest",
@@ -183,6 +191,114 @@ function startupLine(status = {}) {
   return `<div class="startup-line" title="${escapeHtml(status.title || status.text)}">${escapeHtml(status.text)}</div>`;
 }
 
+function bytesToGb(value) {
+  return Math.round(Number(value || 0) / 1000 ** 3);
+}
+
+function readStoredDiskKeys() {
+  const raw = localStorage.getItem("vllm-selected-disks");
+  if (raw === null) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function diskKey(disk) {
+  return `${disk.source || ""}|${disk.mount || ""}`;
+}
+
+function diskLabel(disk) {
+  return `${disk.source || "Disk"} ${disk.mount || ""}`.trim();
+}
+
+function saveSelectedDisks(keys) {
+  selectedDiskKeys = [...new Set(keys)];
+  localStorage.setItem("vllm-selected-disks", JSON.stringify(selectedDiskKeys));
+}
+
+function metricBar(label, value, detail = "", options = {}) {
+  const missing = options.missing;
+  const percent = Math.max(0, Math.min(100, Number(value || 0)));
+  const fill = missing ? 0 : percent;
+  const display = missing ? "-" : (options.display || `${Math.round(percent)}%`);
+  const suffix = detail ? ` ${escapeHtml(detail)}` : "";
+  return `
+    <div class="metric-item">
+      <div class="metric-label"><span>${escapeHtml(label)}</span><strong>${escapeHtml(display)}${suffix}</strong></div>
+      <div class="metric-track"><div class="metric-fill" style="width:${fill}%"></div></div>
+    </div>
+  `;
+}
+
+function renderSystemMetrics() {
+  const system = state?.system || {};
+  const gpu = system.gpu || {};
+  const disks = system.disks || [];
+  const availableKeys = disks.map(diskKey);
+  let activeKeys = Array.isArray(selectedDiskKeys) ? selectedDiskKeys.filter((key) => availableKeys.includes(key)) : [];
+  if (selectedDiskKeys === null && disks.length) {
+    activeKeys = [diskKey(disks[0])];
+    saveSelectedDisks(activeKeys);
+  } else if (Array.isArray(selectedDiskKeys) && activeKeys.join("|") !== selectedDiskKeys.join("|")) {
+    saveSelectedDisks(activeKeys);
+  }
+  const diskItems = disks.filter((disk) => activeKeys.includes(diskKey(disk))).map((disk, index) => {
+    const detail = `${bytesToGb(disk.used)}GB/${bytesToGb(disk.total)}GB`;
+    const label = `HDD${index + 1}`;
+    return metricBar(label, disk.percent, "", {display: detail});
+  });
+  systemMetrics.innerHTML = [
+    metricBar("CPU", system.cpu?.percent || 0),
+    metricBar("RAM", system.ram?.percent || 0),
+    metricBar("GPU", gpu.gpu_percent || 0, "", {missing: !gpu.available}),
+    metricBar("VRAM", gpu.vram_percent || 0, "", {missing: !gpu.available}),
+    metricBar("Temp", gpu.temp ?? 0, "", {missing: !gpu.available, display: gpu.temp !== null && gpu.temp !== undefined ? `${gpu.temp}C` : "-"}),
+    ...diskItems,
+  ].join("");
+  addDiskBtn.disabled = !disks.length;
+}
+
+function renderDiskModal() {
+  const disks = state?.system?.disks || [];
+  if (!disks.length) {
+    diskModalList.innerHTML = `<p>Keine HDDs gefunden.</p>`;
+    return;
+  }
+  const selected = new Set(Array.isArray(selectedDiskKeys) ? selectedDiskKeys : []);
+  diskModalList.innerHTML = disks.map((disk) => {
+    const key = diskKey(disk);
+    const detail = `${bytesToGb(disk.used)}GB/${bytesToGb(disk.total)}GB`;
+    return `
+      <label class="disk-option">
+        <input type="checkbox" value="${escapeHtml(key)}" ${selected.has(key) ? "checked" : ""}>
+        <span>
+          <strong>${escapeHtml(diskLabel(disk))}</strong>
+          <small>${escapeHtml(detail)} | ${escapeHtml(Math.round(disk.percent))}% belegt</small>
+        </span>
+      </label>
+    `;
+  }).join("");
+}
+
+function openDiskModal() {
+  renderDiskModal();
+  diskModal.classList.remove("hidden");
+}
+
+function closeDiskModal() {
+  diskModal.classList.add("hidden");
+}
+
+function applyDiskSelection() {
+  const keys = [...diskModalList.querySelectorAll("input[type='checkbox']:checked")].map((input) => input.value);
+  saveSelectedDisks(keys);
+  renderSystemMetrics();
+  closeDiskModal();
+}
+
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
   localStorage.setItem("vllm-theme", theme);
@@ -250,6 +366,7 @@ async function refresh() {
   state = await api("/api/status");
   statusLine.textContent = `Docker: ${state.docker ? "ok" : "fehlt"} | NVIDIA SMI: ${state.nvidia_smi ? "aktiv" : "fehlt"} | Web: http://${state.ip}:${state.web_port}/`;
   renderNvidiaStatus();
+  renderSystemMetrics();
   renderRows();
   updateCreateFormPort();
   await refreshJob();
@@ -434,6 +551,13 @@ modelFormat.addEventListener("change", toggleModelFormat);
 
 refreshBtn.addEventListener("click", refresh);
 resetFormBtn.addEventListener("click", () => fillForm());
+addDiskBtn.addEventListener("click", openDiskModal);
+diskModalSaveBtn.addEventListener("click", applyDiskSelection);
+diskModalCancelBtn.addEventListener("click", closeDiskModal);
+diskModalCloseBtn.addEventListener("click", closeDiskModal);
+diskModal.addEventListener("click", (event) => {
+  if (event.target.dataset.closeModal === "disk") closeDiskModal();
+});
 portInput.addEventListener("input", () => {
   portManuallyEdited = true;
 });

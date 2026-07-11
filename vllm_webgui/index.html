@@ -28,6 +28,14 @@
     </section>
 
     <section class="panel">
+      <div class="panel-title">
+        <h2>Systemdaten</h2>
+        <button type="button" id="addDiskBtn" class="icon-button" title="HDDs auswaehlen">+</button>
+      </div>
+      <div id="systemMetrics" class="system-metrics">Lade...</div>
+    </section>
+
+    <section class="panel">
       <h2>Container</h2>
       <div class="table-wrap">
         <table>
@@ -145,6 +153,21 @@
       </section>
     </section>
   </main>
+
+  <div id="diskModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="diskModalTitle">
+    <div class="modal-backdrop" data-close-modal="disk"></div>
+    <section class="modal-panel">
+      <div class="panel-title">
+        <h2 id="diskModalTitle">HDDs anzeigen</h2>
+        <button type="button" id="diskModalCloseBtn" class="icon-button secondary" title="Schliessen">x</button>
+      </div>
+      <div id="diskModalList" class="disk-list"></div>
+      <div class="actions modal-actions">
+        <button type="button" id="diskModalSaveBtn">Uebernehmen</button>
+        <button type="button" id="diskModalCancelBtn" class="secondary">Abbrechen</button>
+      </div>
+    </section>
+  </div>
 
   <script src="/app.js"></script>
 </body>

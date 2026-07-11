@@ -36,6 +36,8 @@ jobs = {}
 jobs_lock = threading.Lock()
 config_lock = threading.Lock()
 startup_lock = threading.Lock()
+cpu_lock = threading.Lock()
+last_cpu_sample = None
 
 
 def run(cmd, check=False, timeout=None):
@@ -824,6 +826,120 @@ def local_ip():
     return (proc.stdout.strip().split() or ["127.0.0.1"])[0]
 
 
+def read_cpu_sample():
+    try:
+        first = Path("/proc/stat").read_text(encoding="utf-8").splitlines()[0]
+        parts = [int(value) for value in first.split()[1:]]
+    except Exception:
+        return None
+    idle = parts[3] + (parts[4] if len(parts) > 4 else 0)
+    total = sum(parts)
+    return total, idle
+
+
+def cpu_percent():
+    global last_cpu_sample
+    sample = read_cpu_sample()
+    if not sample:
+        return 0
+    with cpu_lock:
+        previous = last_cpu_sample
+        last_cpu_sample = sample
+    if not previous:
+        return 0
+    total_delta = sample[0] - previous[0]
+    idle_delta = sample[1] - previous[1]
+    if total_delta <= 0:
+        return 0
+    return round(max(0, min(100, (1 - idle_delta / total_delta) * 100)), 1)
+
+
+def memory_status():
+    values = {}
+    try:
+        for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+            key, raw = line.split(":", 1)
+            values[key] = int(raw.strip().split()[0]) * 1024
+    except Exception:
+        return {"percent": 0, "used": 0, "total": 0}
+    total = values.get("MemTotal", 0)
+    available = values.get("MemAvailable", 0)
+    used = max(0, total - available)
+    percent = round(used / total * 100, 1) if total else 0
+    return {"percent": percent, "used": used, "total": total}
+
+
+def gpu_status():
+    if shutil.which("nvidia-smi") is None:
+        return {"available": False, "gpu_percent": 0, "vram_percent": 0, "vram_used": 0, "vram_total": 0, "temp": None}
+    query = "utilization.gpu,memory.used,memory.total,temperature.gpu"
+    proc = run(["nvidia-smi", f"--query-gpu={query}", "--format=csv,noheader,nounits"], timeout=4)
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return {"available": False, "gpu_percent": 0, "vram_percent": 0, "vram_used": 0, "vram_total": 0, "temp": None}
+    try:
+        values = [part.strip() for part in proc.stdout.splitlines()[0].split(",")]
+        gpu = float(values[0])
+        used = int(float(values[1])) * 1024 * 1024
+        total = int(float(values[2])) * 1024 * 1024
+        temp = int(float(values[3]))
+    except Exception:
+        return {"available": False, "gpu_percent": 0, "vram_percent": 0, "vram_used": 0, "vram_total": 0, "temp": None}
+    return {
+        "available": True,
+        "gpu_percent": round(max(0, min(100, gpu)), 1),
+        "vram_percent": round(used / total * 100, 1) if total else 0,
+        "vram_used": used,
+        "vram_total": total,
+        "temp": temp,
+    }
+
+
+def disk_status():
+    proc = run(["df", "-B1", "--output=source,target,size,used,pcent", "-x", "tmpfs", "-x", "devtmpfs"], timeout=4)
+    if proc.returncode != 0:
+        return []
+    disks = []
+    seen = set()
+    for line in proc.stdout.splitlines()[1:]:
+        parts = line.split()
+        if len(parts) < 5:
+            continue
+        source, target, size, used, percent = parts[:5]
+        if not source.startswith("/dev/"):
+            continue
+        key = (source, target)
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            size_int = int(size)
+            used_int = int(used)
+            percent_float = float(percent.rstrip("%"))
+        except ValueError:
+            continue
+        if size_int <= 0:
+            continue
+        disks.append({
+            "source": source,
+            "mount": target,
+            "used": used_int,
+            "total": size_int,
+            "percent": round(max(0, min(100, percent_float)), 1),
+        })
+    disks.sort(key=lambda item: (item["mount"] != "/", item["mount"]))
+    return disks
+
+
+def system_metrics():
+    gpu = gpu_status()
+    return {
+        "cpu": {"percent": cpu_percent()},
+        "ram": memory_status(),
+        "gpu": gpu,
+        "disks": disk_status(),
+    }
+
+
 def size_to_bytes(value, unit):
     factors = {
         "B": 1,
@@ -1022,6 +1138,7 @@ def system_status():
         "ip": local_ip(),
         "web_port": PORT,
         "ports_in_use": sorted(host_ports_in_use()),
+        "system": system_metrics(),
         "containers": containers,
         "jobs": job_values,
     }
