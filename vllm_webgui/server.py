@@ -29,9 +29,11 @@ PORT = int(os.environ.get("VLLM_WEBGUI_PORT", "18000"))
 
 DEFAULT_IMAGE = "vllm/vllm-openai:latest"
 DEFAULT_MODEL = "Qwen/Qwen3-0.6B"
+RUNNER_VERSION = "2026-07-12-gguf-container-cache"
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{1,63}$")
 PERCENT_RE = re.compile(r"(?<!\d)(100|[0-9]{1,2})(?:\.\d+)?%")
 SIZE_RE = re.compile(r"([0-9]+(?:\.[0-9]+)?)\s*([KMGT]?i?B)\s*/\s*([0-9]+(?:\.[0-9]+)?)\s*([KMGT]?i?B)", re.IGNORECASE)
+SPLIT_GGUF_RE = re.compile(r"^(?P<prefix>.+-)(?P<index>\d+)-of-(?P<total>\d+)(?P<suffix>\.gguf)$", re.IGNORECASE)
 
 jobs = {}
 jobs_lock = threading.Lock()
@@ -57,6 +59,7 @@ DEFAULT_UI_SETTINGS = {
     },
     "view": {
         "containerLimit": 5,
+        "modelSizeWarnReserveGb": 8,
         "containerSort": "port",
         "containerSortDirection": "asc",
         "ramSizeUnit": "GB",
@@ -155,6 +158,7 @@ def normalize_ui_settings(data):
         },
         "view": {
             "containerLimit": ui_int(view.get("containerLimit"), DEFAULT_UI_SETTINGS["view"]["containerLimit"], 1),
+            "modelSizeWarnReserveGb": ui_int(view.get("modelSizeWarnReserveGb"), DEFAULT_UI_SETTINGS["view"]["modelSizeWarnReserveGb"], 0),
             "containerSort": container_sort if container_sort in sort_fields else DEFAULT_UI_SETTINGS["view"]["containerSort"],
             "containerSortDirection": container_sort_direction if container_sort_direction in sort_directions else DEFAULT_UI_SETTINGS["view"]["containerSortDirection"],
             "ramSizeUnit": ram_size_unit if ram_size_unit in size_units else DEFAULT_UI_SETTINGS["view"]["ramSizeUnit"],
@@ -560,7 +564,7 @@ def config_hash(item):
         "docker_extra_args",
         "autostart",
     ]
-    payload = json.dumps({k: item.get(k) for k in keys}, sort_keys=True)
+    payload = json.dumps({"runner_version": RUNNER_VERSION, **{k: item.get(k) for k in keys}}, sort_keys=True)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
@@ -613,11 +617,11 @@ def model_cache_paths(item):
         gguf_url = item.get("gguf_url", "").strip()
         gguf_repo = item.get("gguf_repo", "").strip()
         if gguf_file.startswith("/"):
-            return [Path(gguf_file)]
+            return split_gguf_paths(Path(gguf_file))
         if gguf_url:
-            return [cache_dir / "gguf" / filename_from_url(gguf_url)]
+            return [cache_dir / "gguf" / name for name in split_gguf_filenames(filename_from_url(gguf_url))]
         if gguf_repo and gguf_file.lower().endswith(".gguf"):
-            return [cache_dir / "gguf" / Path(gguf_file).name]
+            return [cache_dir / "gguf" / name for name in split_gguf_filenames(Path(gguf_file).name)]
         if gguf_repo:
             return [
                 cache_dir / "hub" / hf_repo_cache_name(gguf_repo),
@@ -652,6 +656,77 @@ def hf_resolve_url(repo, filename):
     clean_file = filename.lstrip("/")
     quoted_file = urllib.parse.quote(clean_file, safe="/")
     return f"https://huggingface.co/{repo}/resolve/main/{quoted_file}"
+
+
+def split_gguf_filenames(filename):
+    name = Path(filename).name
+    match = SPLIT_GGUF_RE.match(name)
+    if not match:
+        return [name]
+    total = int(match.group("total"))
+    index_width = len(match.group("index"))
+    total_text = match.group("total")
+    return [
+        f"{match.group('prefix')}{str(index).zfill(index_width)}-of-{total_text}{match.group('suffix')}"
+        for index in range(1, total + 1)
+    ]
+
+
+def split_gguf_paths(path):
+    return [path.with_name(name) for name in split_gguf_filenames(path.name)]
+
+
+def gguf_sort_key(path):
+    name = Path(path).name
+    match = SPLIT_GGUF_RE.match(name)
+    if match:
+        return (match.group("prefix").lower(), int(match.group("index")), name.lower())
+    return (name.lower(), 0, name.lower())
+
+
+def cached_quant_gguf_files(cache_dir, repo, quant):
+    repo_dir = cache_dir / "hub" / hf_repo_cache_name(repo)
+    snapshots_dir = repo_dir / "snapshots"
+    if not snapshots_dir.exists():
+        return []
+
+    quant_lower = quant.lower()
+    matches = []
+    for path in snapshots_dir.rglob("*.gguf"):
+        rel_parts = [part.lower() for part in path.relative_to(snapshots_dir).parts]
+        if quant_lower in path.name.lower() or quant_lower in rel_parts:
+            matches.append(path)
+    return sorted(matches, key=gguf_sort_key)
+
+
+def materialize_gguf_files(job_id, source_paths, cache_dir):
+    if not source_paths:
+        return ""
+    gguf_dir = cache_dir / "gguf"
+    gguf_dir.mkdir(parents=True, exist_ok=True)
+    first_name = Path(source_paths[0]).name
+    for source in source_paths:
+        source = Path(source)
+        source_real = source.resolve()
+        dest = gguf_dir / source.name
+        if dest.exists() and dest.stat().st_size == source_real.stat().st_size:
+            append_job(job_id, f"GGUF Datei bereits bereitgestellt: {dest}")
+            continue
+        if dest.exists():
+            dest.unlink()
+        try:
+            os.link(source_real, dest)
+        except OSError:
+            shutil.copy2(source_real, dest)
+        append_job(job_id, f"GGUF Datei bereitgestellt: {dest}")
+    return f"/root/.cache/huggingface/gguf/{first_name}"
+
+
+def sibling_url(url, filename):
+    parsed = urllib.parse.urlparse(url)
+    path = Path(urllib.parse.unquote(parsed.path))
+    sibling_path = str(path.with_name(filename))
+    return urllib.parse.urlunparse(parsed._replace(path=urllib.parse.quote(sibling_path, safe="/")))
 
 
 def filename_from_url(url):
@@ -712,24 +787,37 @@ def prepare_gguf_model(job_id, item):
         host_path = Path(gguf_file)
         if not host_path.exists() or not host_path.is_file():
             raise RuntimeError(f"Lokale GGUF-Datei nicht gefunden: {host_path}")
+        missing_parts = [path for path in split_gguf_paths(host_path) if not path.exists()]
+        if missing_parts:
+            raise RuntimeError("Lokale GGUF-Split-Dateien fehlen: " + ", ".join(str(path) for path in missing_parts))
         container_dir = "/models/gguf-local"
         local_mounts.append(f"{host_path.parent}:{container_dir}:ro")
         return f"{container_dir}/{host_path.name}", local_mounts
 
     if gguf_url:
         filename = filename_from_url(gguf_url)
-        dest = cache_dir / "gguf" / filename
-        download_file(job_id, gguf_url, dest, item.get("hf_token", ""))
+        for name in split_gguf_filenames(filename):
+            dest = cache_dir / "gguf" / name
+            download_file(job_id, sibling_url(gguf_url, name), dest, item.get("hf_token", ""))
         return f"/root/.cache/huggingface/gguf/{filename}", local_mounts
 
     if gguf_repo and gguf_file.lower().endswith(".gguf"):
         filename = Path(gguf_file).name
-        dest = cache_dir / "gguf" / filename
-        download_file(job_id, hf_resolve_url(gguf_repo, gguf_file), dest, item.get("hf_token", ""))
+        parent = str(Path(gguf_file).parent)
+        parent = "" if parent == "." else parent.strip("/")
+        for name in split_gguf_filenames(filename):
+            repo_file = f"{parent}/{name}" if parent else name
+            dest = cache_dir / "gguf" / name
+            download_file(job_id, hf_resolve_url(gguf_repo, repo_file), dest, item.get("hf_token", ""))
         return f"/root/.cache/huggingface/gguf/{filename}", local_mounts
 
     if gguf_repo and gguf_file:
+        cached_files = cached_quant_gguf_files(cache_dir, gguf_repo, gguf_file)
+        if cached_files:
+            append_job(job_id, f"GGUF Quantisierung lokal gefunden: {gguf_file} ({len(cached_files)} Datei(en))")
+            return materialize_gguf_files(job_id, cached_files, cache_dir), local_mounts
         append_job(job_id, f"GGUF Hugging-Face Direktformat: {gguf_repo}:{gguf_file}")
+        append_job(job_id, "Hinweis: Wenn das Plugin danach Dateien in snapshots/<hash>/<quant>/ findet, aber nicht startet, Container erneut starten; die WebGUI nutzt dann den lokalen Cache direkt.")
         return f"{gguf_repo}:{gguf_file}", local_mounts
 
     raise RuntimeError("GGUF-Konfiguration unvollstaendig.")
@@ -836,6 +924,18 @@ def build_run_args(item, model_arg=None, extra_mounts=None):
             "uv pip install --system --upgrade vllm-gguf-plugin || uv pip install --upgrade vllm-gguf-plugin; "
             "else python3 -m pip install --upgrade vllm-gguf-plugin; fi; "
             "python3 /root/.cache/huggingface/vllm-gguf-patch.py; "
+            "model_arg=\"$1\"; "
+            "if printf '%s' \"$model_arg\" | grep -Eq '^[^/]+/[^:]+:[^:]+$'; then "
+            "repo=\"${model_arg%%:*}\"; quant=\"${model_arg#*:}\"; repo_cache=\"models--${repo//\\//--}\"; "
+            "snapshots=\"/root/.cache/huggingface/hub/$repo_cache/snapshots\"; "
+            "if [ -d \"$snapshots\" ]; then "
+            "found=\"$(find -L \"$snapshots\" -type f -name '*.gguf' | awk -v q=\"/$quant/\" -v q2=\"$quant\" 'index(tolower($0), tolower(q)) || index(tolower($0), tolower(q2)) { print; exit }')\"; "
+            "if [ -n \"$found\" ]; then "
+            "echo \"GGUF cache preflight: using local file $found\"; "
+            "shift; set -- \"$found\" \"$@\"; "
+            "else echo \"GGUF cache preflight: no local file for $model_arg in $snapshots\"; fi; "
+            "else echo \"GGUF cache preflight: snapshots not found: $snapshots\"; fi; "
+            "fi; "
             "exec vllm serve \"$@\""
         )
         args += [
@@ -1239,6 +1339,8 @@ def api_status_ready(item):
 def diagnose_logs(logs):
     if "DeepseekV4 fp8_ds_mla layout only supports fp8 kv-cache" in logs:
         return "DeepSeek-V4 braucht fuer dieses FP8/MLA-Layout einen FP8-KV-Cache. In Extra Args z.B. --kv-cache-dtype fp8 setzen und Container neu starten."
+    if "Downloaded GGUF files not found" in logs and "quant_type" in logs:
+        return "GGUF-Plugin findet die geladene Quantisierung nicht, obwohl sie im HF-Cache liegen kann. Container erneut starten: die WebGUI nutzt dann vorhandene Dateien aus snapshots/<hash>/<quant>/ direkt als lokale GGUF-Dateien."
     if "Can't get gguf config for qwen3_vl" in logs:
         return "Qwen3-VL GGUF wird vom vLLM-GGUF-Plugin nicht unterstuetzt. Nutze dafuer das normale Hugging-Face/Safetensors-Modell oder eine andere Runtime."
     gguf_config_error = re.search(r"Can't get gguf config for ([A-Za-z0-9_.-]+)", logs)

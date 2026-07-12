@@ -102,7 +102,7 @@
           </label>
 
           <label>GGUF Datei oder Quantisierung
-            <input id="ggufFile" placeholder="z.B. Q4_K_M oder model-Q4_K_M.gguf oder /opt/models/model.gguf">
+            <input id="ggufFile" placeholder="z.B. Q4_K_M, model-Q4_K_M.gguf, model-00001-of-00002.gguf oder /opt/models/model-00001-of-00002.gguf">
           </label>
 
           <label>GGUF Direkt-URL
@@ -216,9 +216,16 @@
         </label>
       </div>
       <h2 class="modal-subtitle">Container Anzeige</h2>
-      <div class="settings-grid">
+      <div class="settings-grid settings-grid-two">
         <label>Max. Container anzeigen
           <input id="containerLimitInput" type="number" min="1" step="1">
+        </label>
+        <label>Warngrenze Modell Size -8GB Reserve
+          <div class="number-stepper">
+            <button type="button" class="secondary" data-stepper-target="modelSizeWarnReserveInput" data-stepper-delta="-1">-</button>
+            <input id="modelSizeWarnReserveInput" type="number" min="0" step="1">
+            <button type="button" class="secondary" data-stepper-target="modelSizeWarnReserveInput" data-stepper-delta="1">+</button>
+          </div>
         </label>
         <label>Container sortieren nach
           <select id="containerSortInput">
@@ -229,7 +236,7 @@
             <option value="api_ready">API bereit</option>
           </select>
         </label>
-        <label>Sortier-Richtung
+        <label>Container-Sortier-Richtung
           <select id="containerSortDirectionInput">
             <option value="asc">aufsteigend</option>
             <option value="desc">absteigend</option>

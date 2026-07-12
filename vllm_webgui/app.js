@@ -30,6 +30,7 @@ const systemIntervalInput = document.getElementById("systemIntervalInput");
 const containersIntervalInput = document.getElementById("containersIntervalInput");
 const logsIntervalInput = document.getElementById("logsIntervalInput");
 const containerLimitInput = document.getElementById("containerLimitInput");
+const modelSizeWarnReserveInput = document.getElementById("modelSizeWarnReserveInput");
 const containerSortInput = document.getElementById("containerSortInput");
 const containerSortDirectionInput = document.getElementById("containerSortDirectionInput");
 const showOverviewCard = document.getElementById("showOverviewCard");
@@ -71,6 +72,7 @@ const defaultCardSettings = {
 
 const defaultViewSettings = {
   containerLimit: 5,
+  modelSizeWarnReserveGb: 8,
   containerSort: "port",
   containerSortDirection: "asc",
   ramSizeUnit: "GB",
@@ -173,8 +175,15 @@ function hfLink(repo) {
 }
 
 function modelSizeLine(container) {
-  const label = container.model_size_label || "";
-  return `<br><small>Size: ${label ? escapeHtml(label) : "-"}</small>`;
+  const modelSize = Number(container.model_size_bytes || 0);
+  const vramTotal = Number(state?.system?.gpu?.vram_total || 0);
+  const label = modelSize > 0 ? formatModelSize(modelSize) : "";
+  const modelSizeGb = modelSize > 0 ? Math.round(modelSize / (1000 ** 3)) : 0;
+  const vramTotalGb = vramTotal > 0 ? Math.round(vramTotal / (1024 ** 3)) : 0;
+  const reserveGb = Number(readViewSettings().modelSizeWarnReserveGb || 0);
+  const tooLarge = modelSizeGb > 0 && vramTotalGb > 0 && modelSizeGb > Math.max(0, vramTotalGb - reserveGb);
+  const className = tooLarge ? ` class="model-size-warning"` : "";
+  return `<br><small${className}>Size: ${label ? escapeHtml(label) : "-"}</small>`;
 }
 
 function safeFilePart(value) {
@@ -270,6 +279,16 @@ function formatBytesUnit(value, unit = "GB") {
   return `${formatNumber(amount, amount < 10 ? 1 : 0)}GB`;
 }
 
+function formatModelSize(value) {
+  const bytes = Number(value || 0);
+  if (bytes >= 1000 ** 4) {
+    const amount = bytes / (1000 ** 4);
+    return `${formatNumber(amount, amount < 10 ? 2 : 1)}TB`;
+  }
+  const amount = bytes / (1000 ** 3);
+  return `${formatNumber(amount, amount < 10 ? 1 : 0)}GB`;
+}
+
 function formatUsage(used, total, unit = "GB") {
   return `${formatBytesUnit(used, unit)}/${formatBytesUnit(total, unit)}`;
 }
@@ -306,6 +325,7 @@ function normalizeUiSettings(settings = {}) {
   const rawContainerSort = view.containerSort === "running" ? "status" : view.containerSort;
   const containerSort = sortFields.has(rawContainerSort) ? rawContainerSort : defaultViewSettings.containerSort;
   const containerSortDirection = sortDirections.has(view.containerSortDirection) ? view.containerSortDirection : defaultViewSettings.containerSortDirection;
+  const warnReserve = Number(view.modelSizeWarnReserveGb);
   const legacySizeUnit = sizeUnits.has(view.systemSizeUnit) ? view.systemSizeUnit : null;
   const ramSizeUnit = sizeUnits.has(view.ramSizeUnit) ? view.ramSizeUnit : (legacySizeUnit || defaultViewSettings.ramSizeUnit);
   const vramSizeUnit = sizeUnits.has(view.vramSizeUnit) ? view.vramSizeUnit : (legacySizeUnit || defaultViewSettings.vramSizeUnit);
@@ -327,6 +347,7 @@ function normalizeUiSettings(settings = {}) {
     },
     view: {
       containerLimit: Math.max(1, Number(view.containerLimit) || defaultViewSettings.containerLimit),
+      modelSizeWarnReserveGb: Number.isFinite(warnReserve) ? Math.max(0, warnReserve) : defaultViewSettings.modelSizeWarnReserveGb,
       containerSort,
       containerSortDirection,
       ramSizeUnit,
@@ -405,8 +426,10 @@ function saveViewSettings(settings) {
   const sizeUnits = new Set(["GB", "TB"]);
   const tempUnits = new Set(["C", "F"]);
   const current = readViewSettings();
+  const warnReserve = Number(settings.modelSizeWarnReserveGb);
   const cleaned = {
     containerLimit: Math.max(1, Number(settings.containerLimit) || defaultViewSettings.containerLimit),
+    modelSizeWarnReserveGb: Number.isFinite(warnReserve) ? Math.max(0, warnReserve) : current.modelSizeWarnReserveGb,
     containerSort: sortFields.has(settings.containerSort) ? settings.containerSort : defaultViewSettings.containerSort,
     containerSortDirection: sortDirections.has(settings.containerSortDirection) ? settings.containerSortDirection : defaultViewSettings.containerSortDirection,
     ramSizeUnit: sizeUnits.has(settings.ramSizeUnit) ? settings.ramSizeUnit : current.ramSizeUnit,
@@ -582,6 +605,7 @@ function fillSettingsForm(settings = readPollSettings()) {
   containersIntervalInput.value = settings.containers;
   logsIntervalInput.value = settings.logs;
   containerLimitInput.value = viewSettings.containerLimit;
+  modelSizeWarnReserveInput.value = viewSettings.modelSizeWarnReserveGb;
   containerSortInput.value = viewSettings.containerSort;
   containerSortDirectionInput.value = viewSettings.containerSortDirection;
   showOverviewCard.checked = cardSettings.overview;
@@ -614,6 +638,7 @@ async function applySettings() {
   }));
   saveViewSettings({
     containerLimit: containerLimitInput.value,
+    modelSizeWarnReserveGb: modelSizeWarnReserveInput.value,
     containerSort: containerSortInput.value,
     containerSortDirection: containerSortDirectionInput.value,
   });
@@ -991,6 +1016,19 @@ settingsModal.addEventListener("click", (event) => {
 containerLimitToggleBtn.addEventListener("click", () => {
   showAllContainers = !showAllContainers;
   renderRows();
+});
+document.querySelectorAll("[data-stepper-target]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const input = document.getElementById(button.dataset.stepperTarget);
+    if (!input) return;
+    const delta = Number(button.dataset.stepperDelta || 0);
+    const step = Number(input.step || 1);
+    const min = input.min === "" ? -Infinity : Number(input.min);
+    const max = input.max === "" ? Infinity : Number(input.max);
+    const current = Number(input.value || 0);
+    const next = Math.min(max, Math.max(min, current + delta * step));
+    input.value = Number.isInteger(next) ? String(next) : String(Number(next.toFixed(2)));
+  });
 });
 portInput.addEventListener("input", () => {
   portManuallyEdited = true;

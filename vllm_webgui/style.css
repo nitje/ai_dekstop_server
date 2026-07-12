@@ -241,8 +241,22 @@ label {
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 
+.settings-grid-two {
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+}
+
 .settings-grid label {
   margin-bottom: 0;
+}
+
+.number-stepper {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: 36px minmax(70px, 1fr) 36px;
+}
+
+.number-stepper button {
+  padding: 7px 0;
 }
 
 .settings-checks {
@@ -496,6 +510,11 @@ small {
   overflow-wrap: anywhere;
 }
 
+small.model-size-warning {
+  color: var(--danger);
+  font-weight: 700;
+}
+
 small.diagnostic {
   display: inline-block;
   color: #ffcf99;
@@ -569,6 +588,10 @@ small.diagnostic {
   }
 
   .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-grid-two {
     grid-template-columns: 1fr;
   }
 
