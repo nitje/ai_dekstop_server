@@ -29,7 +29,7 @@ PORT = int(os.environ.get("VLLM_WEBGUI_PORT", "18000"))
 
 DEFAULT_IMAGE = "vllm/vllm-openai:latest"
 DEFAULT_MODEL = "Qwen/Qwen3-0.6B"
-RUNNER_VERSION = "2026-07-12-container-autostart-failed"
+RUNNER_VERSION = "2026-07-12-container-duration-failed"
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{1,63}$")
 PERCENT_RE = re.compile(r"(?<!\d)(100|[0-9]{1,2})(?:\.\d+)?%")
 SIZE_RE = re.compile(r"([0-9]+(?:\.[0-9]+)?)\s*([KMGT]?i?B)\s*/\s*([0-9]+(?:\.[0-9]+)?)\s*([KMGT]?i?B)", re.IGNORECASE)
@@ -340,6 +340,9 @@ def runtime_status_for(name, api_ready):
             runtime["updated_at"] = int(now)
         else:
             if runtime.get("active") or runtime.get("last_ready_seen_at") or runtime.get("active_since"):
+                if last_seen:
+                    total += max(0.0, now - float(last_seen))
+                    runtime["total_seconds"] = int(total)
                 runtime["active"] = False
                 runtime.pop("last_ready_seen_at", None)
                 runtime.pop("active_since", None)
@@ -1629,6 +1632,33 @@ def start_autostart_reconciler():
     thread.start()
 
 
+def runtime_monitor_loop():
+    interval = max(2, int(os.environ.get("VLLM_WEBGUI_RUNTIME_MONITOR_INTERVAL", "5") or 5))
+    while True:
+        try:
+            if docker_daemon_ready():
+                for item in list_configured():
+                    name = item.get("name")
+                    if not name:
+                        continue
+                    if container_running(name):
+                        api_ready = api_status_ready(item)
+                        startup_status_for(name, "running", api_ready)
+                        runtime_status_for(name, api_ready)
+                    else:
+                        status = "stopped" if container_exists(name) else "missing"
+                        startup_status_for(name, status, False)
+                        runtime_status_for(name, False)
+        except Exception as exc:
+            print(f"vLLM WebGUI runtime monitor failed: {exc}", flush=True)
+        time.sleep(interval)
+
+
+def start_runtime_monitor():
+    thread = threading.Thread(target=runtime_monitor_loop, daemon=True)
+    thread.start()
+
+
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(STATIC_DIR), **kwargs)
@@ -1757,6 +1787,7 @@ def main():
     STATIC_DIR.mkdir(parents=True, exist_ok=True)
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     start_autostart_reconciler()
+    start_runtime_monitor()
     print(f"vLLM WebGUI listening on http://{HOST}:{PORT}/", flush=True)
     server.serve_forever()
 
