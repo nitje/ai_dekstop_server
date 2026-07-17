@@ -1,5 +1,5 @@
-# ai_desktop_server v0.56
-ai_desktop_server with vllm-webgui(docker) | LM Studio | VS Code | ComfyUI ... RTX 6000 Pro Workstation optimized
+# ai_desktop_server v0.57
+ai_desktop_server with vllm-webgui(docker) | LM Studio | VS Code | ComfyUI | OpenWebui | Ollama ... RTX 6000 Pro Workstation optimized
 <br><br><br>
 Vorraussetzung:<br>
 Debian 13.5 mit Desktop gnome ist Vorinstalliert
@@ -39,9 +39,20 @@ vLLM Zusatzargumente:
 
 --reasoning-parser qwen3
 
+--enable-force-include-usage
+
 --kv-cache-dtype fp8
 
 --kv-cache-dtype fp8_e4m3
+<br><br><br>
+# Aktualisierungen in v0.57 (nur ein Versionssprung)
+Design der Button auf der Hauptseite angepasst.
+
+Zusätzliches script "ai_desktop_server_container.sh" mit dazugehörigen Ordner "container" - (Beta)
+<br>
+Damit kann "Open_Webui" Installiert werden um als Beispiel dort die vLLM Modelle zu nutzen.<br>
+Damit kann "Open_Webui_ollama" Installiert werden also mit ollama zusätzlich wodurch Modelle bereitgestellt werden können die von vLLM nicht Unterstützt werden.
+Installation kann entsprechend mit i ausgeführt werden und Grundsätzlich muss wärend der Installation nichts angepasst werden, einfach mit ENTER durch Bestättigen.
 <br><br><br>
 # Bilder:
 <br>

@@ -1062,6 +1062,23 @@ button.runtime-save {
   border-color: rgba(25, 195, 125, 0.72);
 }
 
+:root[data-design="aurora-mesh-gradient"] th:nth-child(9),
+:root[data-design="aurora-mesh-gradient"] td:nth-child(9) {
+  width: 240px;
+}
+
+:root[data-design="aurora-mesh-gradient"] td:nth-child(9) .actions {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 4px;
+}
+
+:root[data-design="aurora-mesh-gradient"] td:nth-child(9) button {
+  font-size: 13px;
+  min-height: 36px;
+  padding: 7px 4px;
+}
+
 :root[data-design="aurora-mesh-gradient"] th {
   color: #e0f8ff;
 }
@@ -1255,6 +1272,23 @@ button.runtime-save {
 :root[data-design="aura-glassmorphism"] button.notify-enabled {
   background: linear-gradient(135deg, rgba(25, 195, 125, 0.92), rgba(0, 212, 255, 0.82));
   border-color: rgba(255, 255, 255, 0.34);
+}
+
+:root[data-design="aura-glassmorphism"] th:nth-child(9),
+:root[data-design="aura-glassmorphism"] td:nth-child(9) {
+  width: 240px;
+}
+
+:root[data-design="aura-glassmorphism"] td:nth-child(9) .actions {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 4px;
+}
+
+:root[data-design="aura-glassmorphism"] td:nth-child(9) button {
+  font-size: 13px;
+  min-height: 36px;
+  padding: 7px 4px;
 }
 
 :root[data-design="aura-glassmorphism"] th {

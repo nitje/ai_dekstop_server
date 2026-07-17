@@ -1,0 +1,53 @@
+# Ma Ni - v0.57
+#
+# ai_desktop_server - Projekt - subnet "172.55.0.0/24"
+#
+# open-webui mit ollama = chatgpt
+#
+services:
+  open_webui_ollama:
+    image: ghcr.io/open-webui/open-webui:ollama
+    container_name: open_webui_ollama
+#    restart: always
+#    mem_limit: 1gb
+#    cpus: 4
+    ports:
+      - 28080:8080
+    volumes:
+      - ./data:/app/backend/data
+      - ./ollama:/root/.ollama
+    environment:
+      - OLLAMA_BASE_URL=http://172.55.0.3:11434
+    networks:
+      net:
+                ipv4_address: 172.55.0.2
+    depends_on:
+      - ollama
+
+  ollama:
+    image: ollama/ollama:0.9.3
+    container_name: ollama
+#    restart: always
+#    mem_limit: 28gb
+#    cpus: 4
+    ports:
+      - 11434:11434
+    volumes:
+      - ./ollama:/root/.ollama
+    networks:
+      net:
+                ipv4_address: 172.55.0.3
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+
+networks:
+  net:
+      driver: bridge
+      ipam:
+          driver: default
+          config:
+              - subnet: "172.55.0.0/24"
+                gateway: "172.55.0.1"
